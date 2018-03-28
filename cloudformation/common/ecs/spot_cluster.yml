@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ECS Cluster template - deploys two asg, one spot, one not, joins both to ecs cluster.
+Parameters:
+  Role:
+    Description: Cluster Role Name
+    Type: String
+  Environment:
+    Description: Name of the environment deployed; used in tags and names
+    Type: String
+  SubnetList:
+    Description: A list of public subnet IDs in the VPC for EC2 instances
+    Type: List<AWS::EC2::Subnet::Id>
+  InstanceTypes:
+    Description: EC2 Instance type for Saltstack Master server host(s)
+    Type: String
+    Default: "c5.large,m5.large"
+  AMI:
+    Description: AMI ID
+    Type: AWS::EC2::Image::Id
+  KeyPair:
+    Description: EC2 Key Pair
+    Type: String
+  RootVolumeDevice:
+    Description: Device to attach Root Volume, HVM AMIs can differ so you have a choice, for ECS Optimized use default.
+    Type: String
+    Default: /dev/xvda
+    AllowedValues:
+      - /dev/sda1
+      - /dev/xvda
+  RootEBSVolumeSize:
+    Description: Size in GB of the root volume to attach to this EC2 instance.
+    Type: Number
+    Default: '10'
+    MinValue: '10'
+    MaxValue: '1024'
+  EBSVolumeType:
+    Description: Type of EBS volume.
+    Type: String
+    Default: gp2
+    AllowedValues:
+      - standard
+      - gp2
+    ConstraintDescription: Must be 'standard' or 'gp2'.
+  DeleteEBSVolumesOnTermination:
+    Description: Should the EBS volumes be deleted upon termination.
+    Type: String
+    Default: 'True'
+    AllowedValues:
+      - 'True'
+      - 'False'
+    ConstraintDescription: Must be 'True' or 'False'.
+  HealthCheckGracePeriod:
+    Description: The length of time in seconds after a new EC2 instance comes into
+      service that Auto Scaling starts checking its health.
+    Type: Number
+    Default: '300'
+    MinValue: '1'
+    ConstraintDescription: Must be an integer.
+  InitCapacity:
+    Description: Inital Capacity for SpotFleet
+    Type: Number
+    Default: '2'
+  OnDemandMinInstancesCount:
+    Description: Minimum number of EC2 instances in the On-Demand ASG.
+    Type: Number
+    Default: '1'
+  RollingUpdateMinInstancesInService:
+    Description: Minimum number of EC2 instances to remain in service during rolling
+      update.
+    Type: Number
+    Default: '2'
+    MinValue: '1'
+    MaxValue: '10000'
+  RollingUpdateMaxBatchSize:
+    Description: Maximum number of EC2 instances for batch during rolling update.
+    Type: Number
+    Default: '1'
+    MinValue: '1'
+    MaxValue: '10000'
+  RollingUpdatePauseTime:
+    Description: Amount of time to pause before adding or removing autoscaling instances
+      during rolling update.
+    Type: String
+    Default: PT3M30S
+  InstanceProfile:
+    Description: ARN of the IAM Instance Profile which allows access to resources,
+      including Docker images
+    Type: String
+  SpotFleetRole:
+    Description: ARN of the IAM Role used by SpotFleet
+    Type: String
+  InstanceSecurityGroup:
+    Description: A security groups assigned to EC2 instances in the SpotFleet.
+    Type: AWS::EC2::SecurityGroup::Id
+  CloudWatchAlarmSNSTopic:
+    Description: SNS topic to send AutoScaling Events to.
+    Type: String
+    ConstraintDescription: Must be an SNS Topic.
+  HighCPUThreshold:
+    Description: Average CPU threshold for scaling up EC2 instances in ASG. (Greater
+      than or equal to)
+    Type: Number
+    Default: '75'
+    MinValue: '1'
+  HighCPUReservation:
+    Description: Average CPU Reservation for scaling up EC2 instances in ASG. (Greater
+      than or equal to)
+    Type: Number
+    Default: '86'
+    MinValue: '1'
+  HighCPUPeriod:
+    Description: The time over which the specified statistic is applied. You must
+      specify a time in seconds that is also a multiple of 60.
+    Type: Number
+    Default: '180'
+    MinValue: '60'
+    ConstraintDescription: Must be an integer that is a multiple of 60.
+  LowCPUThreshold:
+    Description: Average CPU threshold for scaling down EC2 instances in ASG. (Less
+      than or equal to)
+    Type: Number
+    Default: '25'
+    MinValue: '1'
+  LowCPUReservation:
+    Description: Average CPU Reservation for scaling down EC2 instances in ASG. (Less
+      than or equal to)
+    Type: Number
+    Default: '40'
+    MinValue: '1'
+  LowCPUPeriod:
+    Description: The time over which the specified statistic is applied. You must
+      specify a time in seconds that is also a multiple of 60.
+    Type: Number
+    Default: '180'
+    MinValue: '60'
+    ConstraintDescription: Must be an integer that is a multiple of 60.
+  ScaleUpAdjustment:
+    Description: Number off EC2 instances to add when scaling up.
+    Type: Number
+    Default: '2'
+  ScaleUpCooldown:
+    Description: Number of seconds for cooldown between scale-up events.
+    Type: Number
+    Default: '300'
+  ScaleDownAdjustment:
+    Description: Number of EC2 instances to remove when scaling down.
+    Type: String
+    Default: '-2'
+  ScaleDownCooldown:
+    Description: Number of seconds for cooldown between scale-down events.
+    Type: Number
+    Default: '300'
+  SpotPercent:
+    Description: The percentage you're willing to pay for a spot instance
+    Type: Number
+    Default: 100
+Resources:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+  SpotFleet:
+    Type: AWS::EC2::SpotFleet
+    Metadata:
+      AWS::CloudFormation::Init:
+        config:
+          commands:
+            01_add_instance_to_cluster:
+              command: !Join [ "", [ "#!/bin/bash\n", "echo ECS_CLUSTER=", !Ref 'ECSCluster', " >> /etc/ecs/ecs.config" ] ]
+          files:
+            /etc/cfn/cfn-hup.conf:
+              content: !Join
+                - ''
+                - - '[main]'
+                  - "\n"
+                  - stack=
+                  - !Ref 'AWS::StackId'
+                  - "\n"
+                  - region=
+                  - !Ref 'AWS::Region'
+              mode: '000400'
+              owner: root
+              group: root
+            /etc/cfn/hooks.d/cfn-auto-reloader.conf:
+              content: !Join
+                - ''
+                - - '[cfn-auto-reloader-hook]'
+                  - "\n"
+                  - triggers=post.update
+                  - "\n"
+                  - path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init
+                  - "\n"
+                  - action=/opt/aws/bin/cfn-init -v
+                  - ' --stack '
+                  - !Ref 'AWS::StackName'
+                  - ' --resource LaunchConfig'
+                  - ' --region '
+                  - !Ref 'AWS::Region'
+                  - "\n"
+                  - runas=root
+                  - "\n"
+          services:
+            sysvinit:
+              cfn-hup:
+                enabled: 'true'
+                ensureRunning: 'true'
+                files:
+                  - /etc/cfn/cfn-hup.conf
+                  - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+    Properties:
+      SpotFleetRequestConfigData:
+        AllocationStrategy: diversified
+        ExcessCapacityTerminationPolicy: default
+        IamFleetRole: !Ref 'SpotFleetRole'
+        ReplaceUnhealthyInstances: true
+        TargetCapacity: !Ref 'InitCapacity'
+        TerminateInstancesWithExpiration: false
+        Type: maintain
+        LaunchSpecifications:
+        - BlockDeviceMappings:
+          - DeviceName: !Ref 'RootVolumeDevice'
+            Ebs:
+              VolumeSize: !Ref 'RootEBSVolumeSize'
+              VolumeType: !Ref 'EBSVolumeType'
+              DeleteOnTermination: !Ref 'DeleteEBSVolumesOnTermination'
+          IamInstanceProfile:
+            Arn: !Ref 'InstanceProfile'
+          ImageId: !Ref 'AMI'
+          InstanceType: !Ref 'InstanceTypes'
+          KeyName: !Ref 'KeyPair'
+          SecurityGroups:
+            - GroupId: !Ref 'InstanceSecurityGroup'
+          SubnetId: !Join [ ',', !Ref 'SubnetList' ]
+          TagSpecifications: 
+            - ResourceType: instance
+              Tags:
+              - Key: Name
+                Value: !Join
+                  - '-'
+                  - - !Ref 'Environment'
+                    - !Ref 'Role'
+                    - SpotFleet
+          UserData: !Base64
+            Fn::Sub:
+            - #!/usr/bin/env bash
+              ## This UserData assumes
+              ## ECS-Optimized Amazon Linux
+              yum -y install aws-cli aws-cfn-bootstrap
+              /opt/aws/bin/cfn-init -v --stack ${STACKNAME} --resource SpotFleet --region ${REGION}
+            - REGION: !Ref 'AWS::Region'
+              STACKNAME: !Ref 'AWS::StackName'
+       
+    
+
+  CloudWatchAlarmHighCPUReservation:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: High CPU Reservation
+      MetricName: CPUReservation
+      Namespace: AWS/ECS
+      Statistic: Average
+      Period: !Ref 'HighCPUPeriod'
+      EvaluationPeriods: '1'
+      Threshold: !Ref 'HighCPUReservation'
+      AlarmActions:
+        #- !Ref 'ScaleUpPolicy'
+        - !Ref 'CloudWatchAlarmSNSTopic'
+      OKActions: []
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref 'ECSCluster'
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+  CloudWatchAlarmLowCPUReservation:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Low CPU Reservation
+      MetricName: CPUReservation
+      Namespace: AWS/EC2
+      Statistic: Average
+      Period: !Ref 'LowCPUPeriod'
+      EvaluationPeriods: '1'
+      Threshold: !Ref 'LowCPUReservation'
+      AlarmActions:
+        #- !Ref 'ScaleDownPolicy'
+        - !Ref 'CloudWatchAlarmSNSTopic'
+      OKActions: []
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref 'ECSCluster'
+      ComparisonOperator: LessThanOrEqualToThreshold
+#  CloudWatchAlarmHighCPU:
+#    Type: AWS::CloudWatch::Alarm
+#    Properties:
+#      AlarmDescription: High CPU
+#      MetricName: CPUUtilization
+#      Namespace: AWS/EC2
+#      Statistic: Average
+#      Period: !Ref 'HighCPUPeriod'
+#      EvaluationPeriods: '1'
+#      Threshold: !Ref 'HighCPUThreshold'
+#      AlarmActions:
+#        - !Ref 'ScaleUpPolicy'
+#        - !Ref 'CloudWatchAlarmSNSTopic'
+#      OKActions: []
+#      Dimensions:
+#        - Name: AutoScalingGroupName
+#          Value: !Ref 'OnDemandASG'
+#      ComparisonOperator: GreaterThanOrEqualToThreshold
+#  CloudWatchAlarmLowCPU:
+#    Type: AWS::CloudWatch::Alarm
+#    Properties:
+#      AlarmDescription: Low CPU
+#      MetricName: CPUUtilization
+#      Namespace: AWS/EC2
+#      Statistic: Average
+#      Period: !Ref 'LowCPUPeriod'
+#      EvaluationPeriods: '1'
+#      Threshold: !Ref 'LowCPUThreshold'
+#      AlarmActions:
+#        - !Ref 'ScaleDownPolicy'
+#      OKActions: []
+#      Dimensions:
+#        - Name: AutoScalingGroupName
+#          Value: !Ref 'OnDemandASG'
+#      ComparisonOperator: LessThanOrEqualToThreshold
+
+Outputs:
+  ECSClusterName:
+    Description: Name of the ECS Cluster
+    Value: !Ref 'ECSCluster'
