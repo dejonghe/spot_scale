@@ -1,0 +1,46 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: SecurityGroups
+Parameters:
+  VPC:
+    Description: ID of VPC
+    Type: String
+    Default: ''
+  VPCCIDR:
+    Description: Cidr block of VPC
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid CIDR range of the form x.x.x.x/x.
+Resources:
+  SpotFleetSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable internal access to the App Layer
+      VpcId: !Ref 'VPC'
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref 'VPCCIDR'
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '443'
+          ToPort: '443'
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: '-1'
+          ToPort: '-1'
+          CidrIp: '0.0.0.0/0'
+      Tags:
+        - Key: Name
+          Value: SpotFleet
+Outputs:
+  SpotFleet:
+    Description: ID of SpotFleet Security Group
+    Value: !Ref 'SpotFleetSecurityGroup'

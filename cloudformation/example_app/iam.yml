@@ -1,0 +1,72 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM Stack, builds SpotFleet Role, Instance Role, InstanceProfile
+Parameters: {}
+Resources:
+  SpotFleetRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - spotfleet.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetRole
+      Path: /
+    Type: AWS::IAM::Role
+  InstanceRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Path: /
+    Type: AWS::IAM::Role
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: /
+      Roles:
+        - !Ref 'InstanceRole'
+  BotoInterface:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+    Type: AWS::IAM::Role
+Outputs:
+  SpotFleetRoleArn:
+    Description: SpotFleet IAM Role ARN
+    Value: !GetAtt [ 'SpotFleetRole', 'Arn' ]
+  InstanceRoleArn:
+    Description: Instance IAM Role ARN
+    Value: !GetAtt [ 'InstanceRole', 'Arn' ]
+  InstanceProfile:
+    Description: IAM Role Instance Profile
+    Value: !Ref 'InstanceProfile'
+  InstanceProfileArn:
+    Description: IAM Role Instance Profile
+    Value: !GetAtt 'InstanceProfile.Arn'
+  BotoInterfaceArn:
+    Description: IAM Role Boto Interface
+    Value: !GetAtt 'BotoInterface.Arn'

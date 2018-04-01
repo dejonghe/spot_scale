@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS CloudFormation Template for SNS.
+Parameters:
+  Email:
+    Description: Email address to receive SNS notifications
+    Type: String
+    Default: 'defaut@not.used'
+    MinLength: '4'
+    MaxLength: '128'
+    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$
+    ConstraintDescription: must be a valid email address.
+  Environment:
+    Description: Environment name assigned to EC2 instances (e.g. 'prod' or 'test').
+    Type: String
+    ConstraintDescription: Must be a string.
+Mappings: {}
+Conditions: 
+  EmailCondition: !Equals [ !Ref 'Email', 'default@not.used' ]
+Resources:
+  Alert:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: !Join [ '', [ 'SpotFleet-ECS-Alert-', !Ref 'Environment' ] ]
+      TopicName: !Join [ '', [ 'SpotFleet-ECS-Alert-', !Ref 'Environment' ] ]
+      Subscription: !If
+        - EmailCondition
+        - Endpoint: !Ref 'Email'
+          Protocol: email
+        - !Ref 'AWS::NoValue'
+Outputs:
+  Alert:
+    Description: ID of Alert
+    Value: !Ref 'Alert'

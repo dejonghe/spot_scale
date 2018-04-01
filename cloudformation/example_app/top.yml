@@ -1,0 +1,170 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Nested Stack for Example app Spot Fleet POC
+Parameters:
+  Project:
+    Description: Name of Project
+    Type: String
+    Default: SpotFleetExample
+  Environment:
+    Description: Environment name assigned to EC2 instances (e.g. 'prod' or 'test').
+    Type: String
+    ConstraintDescription: Must be a string.
+  Release:
+    Description: Release Number
+    Type: String
+    Default: '0.0.1'
+  CloudToolsBucket:
+    Description: Name of Config Bucket
+    Type: String
+  KeyPair:
+    Description: KeyPair Name for Instances.
+    Type: String
+    ConstraintDescription: Must be a existing Key Pair.
+  InstanceType:
+    Description: Instance Type for Instances.
+    Type: String
+    ConstraintDescription: Must be a existing an EC2 Instance Type.
+  AMI:
+    Description: The AMI used for ECS Cluster.
+    Type: String
+    Default: ami-cb17d8b6
+    ConstraintDescription: must be a string.
+  VPC:
+    Description: VPC ID
+    Type: AWS::EC2::VPC::Id
+  VPCCIDR:
+    Description: CIDR block of the VPC.
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: '0.0.0.0/0'
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: Must be valid CIDR notation (i.e. x.x.x.x/x).
+  PublicSubnets:
+    Description: List of public subnets
+    Type: String
+  PrivateSubnets:
+    Description: List of private subnets
+    Type: String
+  Email:
+    Description: Email address to receive SNS notifications
+    Type: String
+    Default: 'defaut@not.used'
+    MinLength: '4'
+    MaxLength: '128'
+    AllowedPattern: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}$
+    ConstraintDescription: must be a valid email address.
+
+
+Mappings: {}
+Conditions: {}
+Resources:
+  SNS:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 
+        - 'https://s3.${REGION}.amazonaws.com/${BUCKET}/${RELEASE}/cloudformation/example_app/sns.yml'
+        - REGION: !Ref 'AWS::Region'
+          BUCKET: !Ref 'CloudToolsBucket'
+          RELEASE: !Ref 'Release'
+      Parameters:
+        Email: !Ref 'Email'
+        Environment: !Ref 'Environment'
+  IAM:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 
+        - 'https://s3.${REGION}.amazonaws.com/${BUCKET}/${RELEASE}/cloudformation/example_app/iam.yml'
+        - REGION: !Ref 'AWS::Region'
+          BUCKET: !Ref 'CloudToolsBucket'
+          RELEASE: !Ref 'Release'
+  BotoInterface:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt "IAM.Outputs.BotoInterfaceArn"
+      Code: 
+        S3Bucket: !Ref 'CloudToolsBucket'
+        S3Key: !Join [ '/', [ !Ref 'Release', 'lambda/cfn_boto_interface.zip' ] ]
+      Timeout: '60'
+      Runtime: python3.6
+
+  SecurityGroups:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 
+        - 'https://s3.${REGION}.amazonaws.com/${BUCKET}/${RELEASE}/cloudformation/example_app/security_groups.yml'
+        - REGION: !Ref 'AWS::Region'
+          BUCKET: !Ref 'CloudToolsBucket'
+          RELEASE: !Ref 'Release'
+      Parameters:
+        VPC: !Ref 'VPC'
+        VPCCIDR: !Ref 'VPCCIDR'
+  InstanceLaunchTemplate:
+    Type: Custom::InstanceLaunchTemplate
+    Properties:
+      ServiceToken: !GetAtt 'BotoInterface.Arn'
+      Service: ec2
+      Create:
+        PhysicalResourceId: '!Create[0].LaunchTemplate.LaunchTemplateId'
+        ResponseData:
+          LaunchTemplateVersion: '!Create[0].!str.LaunchTemplate.LatestVersionNumber'
+        Commands:
+          - Method: create_launch_template
+            Arguments:
+              LaunchTemplateName: TestingTemplate1
+              LaunchTemplateData:
+                ImageId: !Ref 'AMI'
+                InstanceType: !Ref 'InstanceType'
+                KeyName: !Ref 'KeyPair'
+      Update:
+        PhysicalResourceId: '!Update[0].LaunchTemplateVersion.LaunchTemplateId'
+        ResponseData:
+          LaunchTemplateVersion: '!Update[0].!str.LaunchTemplateVersion.VersionNumber'
+        Commands:
+          - Method: create_launch_template_version
+            Arguments:
+              LaunchTemplateId: '!event.PhysicalResourceId'
+              SourceVersion: 1
+              LaunchTemplateData:
+                ImageId: !Ref 'AMI'
+                InstanceType: !Ref 'InstanceType'
+                KeyName: !Ref 'KeyPair'
+          - Method: modify_launch_template
+            Arguments:
+              LaunchTemplateId: '!event.PhysicalResourceId'
+              DefaultVersion: '!Update[0].!str.LaunchTemplateVersion.VersionNumber'
+      Delete:
+        PhysicalResourceId: 'LaunchTemplate.LaunchTemplateId'
+        Commands:
+          - Method: delete_launch_template
+            Arguments:
+              LaunchTemplateId: '!event.PhysicalResourceId'
+
+
+#  ECSCluster:
+#    Type: AWS::CloudFormation::Stack
+#    Properties:
+#      TemplateURL: !Sub 
+#        - 'https://s3.${REGION}.amazonaws.com/${BUCKET}/${RELEASE}/cloudformation/common/ecs/spot_cluster.yml'
+#        - REGION: !Ref 'AWS::Region'
+#          BUCKET: !Ref 'CloudToolsBucket'
+#          RELEASE: !Ref 'Release'
+#      Parameters:
+#        Role: ECSCluster
+#        Environment: !Ref 'Environment'
+#        SubnetList: !Ref 'PrivateSubnets'
+#        InstanceTypes: c5.large
+#        AMI: !Ref 'AMI'
+#        KeyPair: !Ref 'KeyPair'
+#        InitCapacity: 2
+#        InstanceProfile: !GetAtt 'IAM.Outputs.InstanceProfileArn'
+#        SpotFleetRole: !GetAtt 'IAM.Outputs.SpotFleetRoleArn'
+#        InstanceSecurityGroup: !GetAtt 'SecurityGroups.Outputs.SpotFleet' 
+#        CloudWatchAlarmSNSTopic: !GetAtt 'SNS.Outputs.Alert'
+
+Outputs:
+  LaunchTemplateGetAtt:
+    Value: !GetAtt 'InstanceLaunchTemplate.LaunchTemplateVersion'
+  LaunchTemplateRef:
+    Value: !Ref 'InstanceLaunchTemplate'
