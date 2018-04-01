@@ -1,3 +1,5 @@
+# Zips
+*.zip
 # Byte-compiled / optimized / DLL files
 config/*
 __pycache__/

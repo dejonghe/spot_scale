@@ -1,0 +1,3 @@
+[submodule "lambda/cfn_boto_interface"]
+	path = lambda/cfn_boto_interface
+	url = https://github.com/dejonghe/cfn_boto_interface.git
