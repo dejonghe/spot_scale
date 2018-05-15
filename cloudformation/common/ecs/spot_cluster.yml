@@ -1,6 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: ECS Cluster template - deploys two asg, one spot, one not, joins both to ecs cluster.
 Parameters:
+  Release:
+    Description: Release Number
+    Type: String
+    Default: '0.0.1'
+  CloudToolsBucket:
+    Description: Name of Config Bucket
+    Type: String
   Role:
     Description: Cluster Role Name
     Type: String
@@ -10,10 +17,10 @@ Parameters:
   SubnetList:
     Description: A list of public subnet IDs in the VPC for EC2 instances
     Type: List<AWS::EC2::Subnet::Id>
-  InstanceTypes:
+  InstanceType:
     Description: EC2 Instance type for Saltstack Master server host(s)
     Type: String
-    Default: "c5.large,m5.large"
+    Default: "m5.large"
   AMI:
     Description: AMI ID
     Type: AWS::EC2::Image::Id
@@ -89,9 +96,15 @@ Parameters:
   SpotFleetRole:
     Description: ARN of the IAM Role used by SpotFleet
     Type: String
-  InstanceSecurityGroup:
+  ScalingRole:
+    Description: ARN of the IAM Role used by SpotFleet Scaling Policy
+    Type: String
+  SpaceMetricRole:
+    Description: ARN of the IAM Role used by SpaceMetric Lambda
+    Type: String
+  SecurityGroups:
     Description: A security groups assigned to EC2 instances in the SpotFleet.
-    Type: AWS::EC2::SecurityGroup::Id
+    Type: List<AWS::EC2::SecurityGroup::Id>
   CloudWatchAlarmSNSTopic:
     Description: SNS topic to send AutoScaling Events to.
     Type: String
@@ -157,8 +170,38 @@ Parameters:
 Resources:
   ECSCluster:
     Type: AWS::ECS::Cluster
-  SpotFleet:
-    Type: AWS::EC2::SpotFleet
+
+  LaunchTemplate:
+    Type: "AWS::EC2::LaunchTemplate"
+    Properties:
+      LaunchTemplateData:
+        TagSpecifications: 
+          - ResourceType: instance
+            Tags:
+            - Key: Name
+              Value: !Join
+                - '-'
+                - - !Ref 'Environment'
+                  - !Ref 'Role'
+                  - SpotFleet
+        BlockDeviceMappings: 
+          - DeviceName: !Ref 'RootVolumeDevice'
+            Ebs:
+              VolumeSize: !Ref 'RootEBSVolumeSize'
+              VolumeType: !Ref 'EBSVolumeType'
+              DeleteOnTermination: !Ref 'DeleteEBSVolumesOnTermination'
+        IamInstanceProfile: 
+          Arn: !Ref 'InstanceProfile'
+        SecurityGroupIds: !Ref 'SecurityGroups'
+        KeyName: !Ref 'KeyPair'
+        ImageId: !Ref 'AMI'
+        UserData: !Base64
+          Fn::Sub:
+          - "#!/usr/bin/env bash\n
+            yum -y install aws-cli aws-cfn-bootstrap\n
+            /opt/aws/bin/cfn-init -v --stack ${STACKNAME} --resource LaunchTemplate --region ${REGION}"
+          - REGION: !Ref 'AWS::Region'
+            STACKNAME: !Ref 'AWS::StackName'
     Metadata:
       AWS::CloudFormation::Init:
         config:
@@ -186,7 +229,7 @@ Resources:
                   - "\n"
                   - triggers=post.update
                   - "\n"
-                  - path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init
+                  - path=Resources.LaunchTemplate.Metadata.AWS::CloudFormation::Init
                   - "\n"
                   - action=/opt/aws/bin/cfn-init -v
                   - ' --stack '
@@ -205,6 +248,9 @@ Resources:
                 files:
                   - /etc/cfn/cfn-hup.conf
                   - /etc/cfn/hooks.d/cfn-auto-reloader.conf
+
+  SpotFleet:
+    Type: AWS::EC2::SpotFleet
     Properties:
       SpotFleetRequestConfigData:
         AllocationStrategy: diversified
@@ -214,77 +260,187 @@ Resources:
         TargetCapacity: !Ref 'InitCapacity'
         TerminateInstancesWithExpiration: false
         Type: maintain
-        LaunchSpecifications:
-        - BlockDeviceMappings:
-          - DeviceName: !Ref 'RootVolumeDevice'
-            Ebs:
-              VolumeSize: !Ref 'RootEBSVolumeSize'
-              VolumeType: !Ref 'EBSVolumeType'
-              DeleteOnTermination: !Ref 'DeleteEBSVolumesOnTermination'
-          IamInstanceProfile:
-            Arn: !Ref 'InstanceProfile'
-          ImageId: !Ref 'AMI'
-          InstanceType: !Ref 'InstanceTypes'
-          KeyName: !Ref 'KeyPair'
-          SecurityGroups:
-            - GroupId: !Ref 'InstanceSecurityGroup'
-          SubnetId: !Join [ ',', !Ref 'SubnetList' ]
-          TagSpecifications: 
-            - ResourceType: instance
-              Tags:
-              - Key: Name
-                Value: !Join
-                  - '-'
-                  - - !Ref 'Environment'
-                    - !Ref 'Role'
-                    - SpotFleet
-          UserData: !Base64
-            Fn::Sub:
-            - #!/usr/bin/env bash
-              ## This UserData assumes
-              ## ECS-Optimized Amazon Linux
-              yum -y install aws-cli aws-cfn-bootstrap
-              /opt/aws/bin/cfn-init -v --stack ${STACKNAME} --resource SpotFleet --region ${REGION}
-            - REGION: !Ref 'AWS::Region'
-              STACKNAME: !Ref 'AWS::StackName'
-       
-    
+        LaunchTemplateConfigs:
+          - LaunchTemplateSpecification:
+              LaunchTemplateId: !Ref 'LaunchTemplate'
+              Version: !GetAtt 'LaunchTemplate.LatestVersionNumber'
+            Overrides:
+              - InstanceType: 'm5.large'
+                SubnetId: !Select [ '0', !Ref 'SubnetList' ]
+                WeightedCapacity: '2'
+              - InstanceType: 'm5.large'
+                SubnetId: !Select [ '1', !Ref 'SubnetList' ]
+                WeightedCapacity: '2'
+              - InstanceType: 'm5.large'
+                SubnetId: !Select [ '2', !Ref 'SubnetList' ]
+                WeightedCapacity: '2'
+              - InstanceType: 'm5.large'
+                SubnetId: !Select [ '3', !Ref 'SubnetList' ]
+                WeightedCapacity: '2'
+              - InstanceType: 'm5.xlarge'
+                SubnetId: !Select [ '0', !Ref 'SubnetList' ]
+                WeightedCapacity: '4'
+              - InstanceType: 'm5.xlarge'
+                SubnetId: !Select [ '1', !Ref 'SubnetList' ]
+                WeightedCapacity: '4'
+              - InstanceType: 'm5.xlarge'
+                SubnetId: !Select [ '2', !Ref 'SubnetList' ]
+                WeightedCapacity: '4'
+              - InstanceType: 'm5.xlarge'
+                SubnetId: !Select [ '3', !Ref 'SubnetList' ]
+                WeightedCapacity: '4'
 
-  CloudWatchAlarmHighCPUReservation:
+  LaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      AssociatePublicIpAddress: 'False'
+      ImageId: !Ref 'AMI'
+      KeyName: !Ref 'KeyPair'
+      IamInstanceProfile: !Ref 'InstanceProfile'
+      SecurityGroups: !Ref 'SecurityGroups'
+      InstanceType: !Ref 'InstanceType'
+      BlockDeviceMappings:
+        - DeviceName: !Ref 'RootVolumeDevice'
+          Ebs:
+            VolumeSize: !Ref 'RootEBSVolumeSize'
+            VolumeType: !Ref 'EBSVolumeType'
+            DeleteOnTermination: !Ref 'DeleteEBSVolumesOnTermination'
+      UserData: !Base64
+        Fn::Sub:
+        - "#!/usr/bin/env bash\n
+          yum -y install aws-cli aws-cfn-bootstrap\n
+          /opt/aws/bin/cfn-init -v --stack ${STACKNAME} --resource LaunchTemplate --region ${REGION}\n
+          /opt/aws/bin/cfn-signal -e $? --stack ${STACKNAME} --resource OnDemand --region ${REGION}\n"
+        - REGION: !Ref 'AWS::Region'
+          STACKNAME: !Ref 'AWS::StackName'
+
+  OnDemand:
+    UpdatePolicy: 
+      AutoScalingRollingUpdate: 
+        MinInstancesInService: "1"
+        MaxBatchSize: "1"
+        PauseTime: "PT5M0S"
+        WaitOnResourceSignals: "false"
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties: 
+      VPCZoneIdentifier: !Ref 'SubnetList'
+      LaunchConfigurationName: !Ref 'LaunchConfig'
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: !Ref 'HealthCheckGracePeriod'
+      MaxSize: "8"
+      MinSize: "0"
+      
+  SpotScaleTarget:
+    Type: "AWS::ApplicationAutoScaling::ScalableTarget"
+    Properties:
+      MaxCapacity: 10
+      MinCapacity: 2
+      ResourceId: !Join [ '/', [ 'spot-fleet-request', !Ref 'SpotFleet' ]]
+      RoleARN: !Ref 'ScalingRole'
+      ScalableDimension: ec2:spot-fleet-request:TargetCapacity
+      ServiceNamespace: ec2
+
+  SpotScaling:
+    DependsOn: SpaceMetricSchedule
+    Type : "AWS::ApplicationAutoScaling::ScalingPolicy"
+    Properties: 
+      PolicyName: !Join ['-',[!Ref 'Environment', 'Spot-Cluster-Target-Track' ]]
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref 'SpotScaleTarget'
+      TargetTrackingScalingPolicyConfiguration: 
+        CustomizedMetricSpecification:
+          Dimensions:
+            - Name: Cluster
+              Value: !Ref 'ECSCluster'
+          MetricName: SchedulableContainers
+          Namespace: AWS/ECS
+          Statistic: Average
+          Unit: Count
+        DisableScaleIn: False
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 300
+        TargetValue: 1
+
+  ScaleUpPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'OnDemand'
+      Cooldown: !Ref 'ScaleUpCooldown'
+      ScalingAdjustment: !Ref 'ScaleUpAdjustment'
+  ScaleDownPolicy:
+    Type: AWS::AutoScaling::ScalingPolicy
+    Properties:
+      AdjustmentType: ChangeInCapacity
+      AutoScalingGroupName: !Ref 'OnDemand'
+      Cooldown: !Ref 'ScaleDownCooldown'
+      ScalingAdjustment: !Ref 'ScaleDownAdjustment'
+
+  SpaceMetric:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: lambda_function.lambda_handler
+      Role: !Ref 'SpaceMetricRole'
+      Code:
+        S3Bucket: !Ref 'CloudToolsBucket'
+        S3Key: !Join [ '/', [ !Ref 'Release', 'lambda/ecs_space_metric.zip' ] ]
+      Timeout: '60'
+      Runtime: python3.6
+  SpacePermission:
+    Type: "AWS::Lambda::Permission"
+    Properties: 
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !Ref 'SpaceMetric'
+      Principal: 'events.amazonaws.com'
+      SourceArn: !GetAtt 'SpaceMetricSchedule.Arn'
+  SpaceMetricSchedule:
+    Type: "AWS::Events::Rule"
+    Properties: 
+      Description: 'Fires SpaceMetric Lambda for cluster'
+      ScheduleExpression: 'rate(2 minutes)'
+      State: 'ENABLED'
+      Targets:
+        - Arn: !GetAtt 'SpaceMetric.Arn'
+          Id: !Join ['-', [!Ref 'Environment', !Ref 'Role', 'Cluster-Space' ]]
+          Input: !Sub 
+            - '{"Cluster": "${Cluster}"}'
+            - Cluster: !Ref 'ECSCluster'
+
+  RequestOnDemand:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmDescription: High CPU Reservation
-      MetricName: CPUReservation
-      Namespace: AWS/ECS
+      AlarmDescription: Pending Spot Capcity High
+      MetricName: PendingCapacity
+      Namespace: AWS/EC2Spot
       Statistic: Average
       Period: !Ref 'HighCPUPeriod'
       EvaluationPeriods: '1'
-      Threshold: !Ref 'HighCPUReservation'
+      Threshold: 3
       AlarmActions:
-        #- !Ref 'ScaleUpPolicy'
+        - !Ref 'ScaleUpPolicy'
         - !Ref 'CloudWatchAlarmSNSTopic'
       OKActions: []
       Dimensions:
-        - Name: ClusterName
-          Value: !Ref 'ECSCluster'
+        - Name: FleetRequestId
+          Value: !Ref 'SpotFleet'
       ComparisonOperator: GreaterThanOrEqualToThreshold
-  CloudWatchAlarmLowCPUReservation:
+  ReleaseOnDemand:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmDescription: Low CPU Reservation
-      MetricName: CPUReservation
-      Namespace: AWS/EC2
+      AlarmDescription: Pending Spot Capacity Low
+      MetricName: PendingCapacity
+      Namespace: AWS/EC2Spot
       Statistic: Average
       Period: !Ref 'LowCPUPeriod'
       EvaluationPeriods: '1'
-      Threshold: !Ref 'LowCPUReservation'
+      Threshold: 1
       AlarmActions:
-        #- !Ref 'ScaleDownPolicy'
+        - !Ref 'ScaleDownPolicy'
         - !Ref 'CloudWatchAlarmSNSTopic'
       OKActions: []
       Dimensions:
-        - Name: ClusterName
-          Value: !Ref 'ECSCluster'
+        - Name: FleetRequestId
+          Value: !Ref 'SpotFleet'
       ComparisonOperator: LessThanOrEqualToThreshold
 #  CloudWatchAlarmHighCPU:
 #    Type: AWS::CloudWatch::Alarm

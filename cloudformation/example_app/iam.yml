@@ -15,6 +15,7 @@ Resources:
         Version: 2012-10-17
       ManagedPolicyArns:
       - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetRole
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole
       Path: /
     Type: AWS::IAM::Role
   InstanceRole:
@@ -30,6 +31,7 @@ Resources:
         Version: 2012-10-17
       ManagedPolicyArns:
       - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      - arn:aws:iam::aws:policy/AmazonECS_FullAccess
       Path: /
     Type: AWS::IAM::Role
   InstanceProfile:
@@ -50,10 +52,58 @@ Resources:
             - lambda.amazonaws.com
         Version: 2012-10-17
       ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/AdministratorAccess
+      - arn:aws:iam::aws:policy/SecretsManagerReadWrite
       - arn:aws:iam::aws:policy/AmazonEC2FullAccess
       - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Path: /
     Type: AWS::IAM::Role
+  ScalingRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - application-autoscaling.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetAutoscaleRole
+  SpaceMetricRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+       -
+         PolicyName: 'SpaceMetric'
+         PolicyDocument:
+           Version: '2012-10-17'
+           Statement:
+             -
+               Effect: 'Allow'
+               Action:
+                 - 'ecs:Describe*'
+                 - 'ecs:List*'
+                 - 'cloudwatch:PutMetricData'
+               Resource: '*'
+
 Outputs:
   SpotFleetRoleArn:
     Description: SpotFleet IAM Role ARN
@@ -70,3 +120,9 @@ Outputs:
   BotoInterfaceArn:
     Description: IAM Role Boto Interface
     Value: !GetAtt 'BotoInterface.Arn'
+  ScalingRoleArn:
+    Description: Spot Fleet Scaling Role ARN
+    Value: !GetAtt 'ScalingRole.Arn'
+  SpaceMetricArn:
+    Description: SpaceMetric Role ARN
+    Value: !GetAtt 'SpaceMetricRole.Arn'

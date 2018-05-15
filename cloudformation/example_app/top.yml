@@ -1,6 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Nested Stack for Example app Spot Fleet POC
 Parameters:
+  SecretId:
+    Description: Id of secret to look up
+    Type: String
+    Default: mytestsecret
   Project:
     Description: Name of Project
     Type: String
@@ -85,86 +89,92 @@ Resources:
       Role: !GetAtt "IAM.Outputs.BotoInterfaceArn"
       Code: 
         S3Bucket: !Ref 'CloudToolsBucket'
-        S3Key: !Join [ '/', [ !Ref 'Release', 'lambda/cfn_boto_interface.zip' ] ]
+        S3Key: !Join [ '/', [ !Ref 'Release', 'lambda/cfn-boto-interface.zip' ] ]
       Timeout: '60'
       Runtime: python3.6
+
 
   SecurityGroups:
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: !Sub 
-        - 'https://s3.${REGION}.amazonaws.com/${BUCKET}/${RELEASE}/cloudformation/example_app/security_groups.yml'
+        - 'https://s3.${AWS::Region}.amazonaws.com/${CloudToolsBucket}/${Release}/cloudformation/example_app/security_groups.yml'
         - REGION: !Ref 'AWS::Region'
-          BUCKET: !Ref 'CloudToolsBucket'
-          RELEASE: !Ref 'Release'
       Parameters:
         VPC: !Ref 'VPC'
         VPCCIDR: !Ref 'VPCCIDR'
-  InstanceLaunchTemplate:
-    Type: Custom::InstanceLaunchTemplate
+  SecretString:
+    Type: Custom::FetchSecret
     Properties:
       ServiceToken: !GetAtt 'BotoInterface.Arn'
-      Service: ec2
+      # When a create event type is send to the lambda use this object
       Create:
-        PhysicalResourceId: '!Create[0].LaunchTemplate.LaunchTemplateId'
+        PhysicalResourceId: '!Create[0].SecretString'
         ResponseData:
-          LaunchTemplateVersion: '!Create[0].!str.LaunchTemplate.LatestVersionNumber'
+          VersionId: '!Create[0].VersionId'
         Commands:
-          - Method: create_launch_template
+          - Client: secretsmanager
+            Method: get_secret_value
             Arguments:
-              LaunchTemplateName: TestingTemplate1
-              LaunchTemplateData:
-                ImageId: !Ref 'AMI'
-                InstanceType: !Ref 'InstanceType'
-                KeyName: !Ref 'KeyPair'
+              SecretId: !Ref 'SecretId'
       Update:
-        PhysicalResourceId: '!Update[0].LaunchTemplateVersion.LaunchTemplateId'
-        ResponseData:
-          LaunchTemplateVersion: '!Update[0].!str.LaunchTemplateVersion.VersionNumber'
-        Commands:
-          - Method: create_launch_template_version
-            Arguments:
-              LaunchTemplateId: '!event.PhysicalResourceId'
-              SourceVersion: 1
-              LaunchTemplateData:
-                ImageId: !Ref 'AMI'
-                InstanceType: !Ref 'InstanceType'
-                KeyName: !Ref 'KeyPair'
-          - Method: modify_launch_template
-            Arguments:
-              LaunchTemplateId: '!event.PhysicalResourceId'
-              DefaultVersion: '!Update[0].!str.LaunchTemplateVersion.VersionNumber'
-      Delete:
-        PhysicalResourceId: 'LaunchTemplate.LaunchTemplateId'
-        Commands:
-          - Method: delete_launch_template
-            Arguments:
-              LaunchTemplateId: '!event.PhysicalResourceId'
+        Replace: 'True'
 
 
-#  ECSCluster:
-#    Type: AWS::CloudFormation::Stack
-#    Properties:
-#      TemplateURL: !Sub 
-#        - 'https://s3.${REGION}.amazonaws.com/${BUCKET}/${RELEASE}/cloudformation/common/ecs/spot_cluster.yml'
-#        - REGION: !Ref 'AWS::Region'
-#          BUCKET: !Ref 'CloudToolsBucket'
-#          RELEASE: !Ref 'Release'
-#      Parameters:
-#        Role: ECSCluster
-#        Environment: !Ref 'Environment'
-#        SubnetList: !Ref 'PrivateSubnets'
-#        InstanceTypes: c5.large
-#        AMI: !Ref 'AMI'
-#        KeyPair: !Ref 'KeyPair'
-#        InitCapacity: 2
-#        InstanceProfile: !GetAtt 'IAM.Outputs.InstanceProfileArn'
-#        SpotFleetRole: !GetAtt 'IAM.Outputs.SpotFleetRoleArn'
-#        InstanceSecurityGroup: !GetAtt 'SecurityGroups.Outputs.SpotFleet' 
-#        CloudWatchAlarmSNSTopic: !GetAtt 'SNS.Outputs.Alert'
+  ECSCluster:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub 
+        - 'https://s3.${AWS::Region}.amazonaws.com/${CloudToolsBucket}/${Release}/cloudformation/common/ecs/spot_cluster.yml'
+        - REGION: !Ref 'AWS::Region'
+      Parameters:
+        CloudToolsBucket: !Ref 'CloudToolsBucket'
+        Release: !Ref 'Release'
+        Role: ECSCluster
+        Environment: !Ref 'Environment'
+        SubnetList: !Ref 'PrivateSubnets'
+        InstanceType: m5.large
+        AMI: !Ref 'AMI'
+        KeyPair: !Ref 'KeyPair'
+        InitCapacity: 2
+        InstanceProfile: !GetAtt 'IAM.Outputs.InstanceProfileArn'
+        SpotFleetRole: !GetAtt 'IAM.Outputs.SpotFleetRoleArn'
+        ScalingRole: !GetAtt 'IAM.Outputs.ScalingRoleArn'
+        SpaceMetricRole: !GetAtt "IAM.Outputs.SpaceMetricArn"
+        SecurityGroups: !Join [ ',', [ !GetAtt 'SecurityGroups.Outputs.SpotFleet' ] ]
+        CloudWatchAlarmSNSTopic: !GetAtt 'SNS.Outputs.Alert'
+  Service:
+    DependsOn: []
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Join
+        - ''
+        - - https://s3.
+          - !Ref 'AWS::Region'
+          - .amazonaws.com/
+          - !Ref 'CloudToolsBucket'
+          - /
+          - !Ref 'Release'
+          - /cloudformation/common/ecs/service.yml
+      Parameters:
+        ContainerImage: 222797466467.dkr.ecr.us-east-1.amazonaws.com/cicd-demo:0.2.0
+        ContainerCpuUnits: 1024
+        ContainerMemory: 1024
+        ContainerName: example
+        EcsCluster: !GetAtt 'ECSCluster.Outputs.ECSClusterName'
+        EcsServiceRole: 'arn:aws:iam::222797466467:role/aws-service-role/ecs.amazonaws.com/AWSServiceRoleForECS'
+        HostedZoneName: 'awsinternal.alt.rightbrainnetworks.com'
+        Project: !Ref 'Project'
+        Environment: !Ref 'Environment'
+        ELBSecurityGroups: !Join [ ',', [ !GetAtt 'SecurityGroups.Outputs.SpotFleet' ] ]
+        ELBSubnetList: !Ref 'PublicSubnets'
+
+
 
 Outputs:
-  LaunchTemplateGetAtt:
-    Value: !GetAtt 'InstanceLaunchTemplate.LaunchTemplateVersion'
-  LaunchTemplateRef:
-    Value: !Ref 'InstanceLaunchTemplate'
+#  LaunchTemplateGetAtt:
+#    Value: !GetAtt 'InstanceLaunchTemplate.LaunchTemplateVersion'
+#  LaunchTemplateRef:
+#    Value: !Ref 'InstanceLaunchTemplate'
+  Secret:
+    Value: !Ref 'SecretString'
