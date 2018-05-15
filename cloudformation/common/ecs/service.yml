@@ -1,0 +1,571 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Creates the Elastic Load Balancer, ECS Service, and Task Definition for
+  a microservice to be run in ECS.
+Parameters:
+  IsELBInternal:
+    Description: Will this ELB be internal? ('True' for internal or 'False' for internet-facing')
+    Type: String
+    Default: 'False'
+    AllowedValues:
+      - 'True'
+      - 'False'
+    ConstraintDescription: Must be 'True' or 'False'.
+  Scales:
+    Description: Will this ELB be internal? ('True' for internal or 'False' for internet-facing')
+    Type: String
+    Default: 'True'
+    AllowedValues:
+      - 'True'
+      - 'False'
+    ConstraintDescription: Must be 'True' or 'False'.
+  UseELBCookieStickinessPolicy:
+    Description: Will this ELB have a cookie stickiness policy? ('True' for internal
+      or 'False' for internet-facing')
+    Type: String
+    Default: 'False'
+    AllowedValues:
+      - 'True'
+      - 'False'
+    ConstraintDescription: Must be 'True or 'False'.
+  EcsCluster:
+    Type: String
+    Description: The name of the ECS Cluster which the resources will be assigned
+      to
+  ELBSubnetList:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of an existing subnet IDs to use for load balancer
+  ELBSecurityGroups:
+    Description: A list of security groups assigned to the ELB.
+    Type: List<AWS::EC2::SecurityGroup::Id>
+  ContainerName:
+    Type: String
+    Description: The name of the docker container which will run the task
+    ConstraintDescription: must be a string.
+  ContainerImage:
+    Type: String
+    Description: The name of the docker image which will be used to create the container.
+      Must be of the form [NAME]:[VERSION], e.g. httpd:2.4
+    ConstraintDescription: must be a string.
+  ContainerCpuUnits:
+    Type: Number
+    Default: '1000'
+    Description: The minimum Cpu units to reserve for the container. There are 1024
+      cpu units in a single core
+    ConstraintDescription: must be a number.
+  ContainerMemory:
+    Type: Number
+    Default: '300'
+    Description: The memory to reserve for the container in MiB
+    ConstraintDescription: must be a number.
+  ContainerPort:
+    Type: Number
+    Default: '80'
+    Description: The port for the container on which the task can be reached
+    ConstraintDescription: must be a number.
+  InstancePort:
+    Type: Number
+    Default: '80'
+    Description: The port for the instance on which the task can be reached
+    ConstraintDescription: must be a number.
+  InstanceListenerProtocol:
+    Description: '[First] listener protocol for the EC2 instance.'
+    Type: String
+    Default: HTTP
+    AllowedValues:
+      - HTTP
+      - HTTPS
+      - TCP
+      - SSL
+  ELBListenerPort:
+    Description: '[First] listener port for the ELB.'
+    Type: Number
+    Default: '80'
+    MinValue: '1'
+    MaxValue: '65535'
+  ELBListenerPort2:
+    Description: '[Second] listener port for the ELB.'
+    Type: Number
+    Default: '443'
+    MinValue: '1'
+    MaxValue: '65535'
+  ELBListenerCert:
+    Description: The ARN of the SSL certificate to use for the [first] ELB listener.
+    Type: String
+    Default: ''
+  ELBListenerCert2:
+    Description: The ARN of the SSL certificate to use for the [second] ELB listener.
+    Type: String
+    Default: ''
+  ELBListenerProtocol:
+    Description: '[First] listener protocol for the ELB.'
+    Type: String
+    Default: HTTP
+    AllowedValues:
+      - HTTP
+      - HTTPS
+      - TCP
+      - SSL
+  ELBListenerProtocol2:
+    Description: '[Second] listener protocol for the ELB.'
+    Type: String
+    Default: ''
+    AllowedValues:
+      - ''
+      - HTTP
+      - HTTPS
+      - TCP
+      - SSL
+      - ''
+  HealthCheckTarget:
+    Type: String
+    Default: HTTP:80/
+    Description: Target for the ELB health check
+    ConstraintDescription: must be a string.
+  ELBHealthyThreshold:
+    Description: Specifies the number of consecutive health probe successes required
+      before moving the instance to the healthy state.
+    Type: Number
+    Default: '2'
+    MinValue: '2'
+    MaxValue: '10'
+    ConstraintDescription: Must be an integer between 2 and 10.
+  ELBUnhealthyThreshold:
+    Description: Specifies the number of consecutive health probe failures required
+      before moving the instance to the healthy state.
+    Type: Number
+    Default: '2'
+    MinValue: '2'
+    MaxValue: '10'
+    ConstraintDescription: Must be an integer between 2 and 10.
+  ELBIntervalThreshold:
+    Description: Amount of time between health checks (between 5 and 300 seconds).
+    Type: Number
+    Default: '10'
+    MinValue: '5'
+    MaxValue: '300'
+    ConstraintDescription: Must be an integer between 5 and 300.
+  ELBTimeoutThreshold:
+    Description: Time to wait when receiving a response from the health check (between
+      2 and 60 seconds).
+    Type: Number
+    Default: '5'
+    MinValue: '2'
+    MaxValue: '60'
+    ConstraintDescription: Must be an integer from 2 to 60.
+  EcsServiceRole:
+    Type: String
+    Description: The IAM role for the ECS service
+  HostedZoneName:
+    Type: String
+    Description: Hosted Zone Name for the Route 53 Record
+  PrivateDomain:
+    Description: Private domain name.
+    Type: String
+    Default: ''
+  PublicDomain:
+    Description: Public domain name.
+    Type: String
+    Default: ''
+  LogHost:
+    Type: String
+    Description: Hosted Zone Name for the Route 53 Record
+    Default: ''
+  Environment:
+    Description: Environment name assigned to EC2 instances (e.g. 'prod' or 'test').
+    Type: String
+    Default: ''
+    ConstraintDescription: Must be a string.
+  Release:
+    Description: Release Number
+    Type: String
+    Default: '0.0.1'
+  Project:
+    Description: Project name.
+    Type: String
+    Default: ''
+    ConstraintDescription: Must be a string.
+  DBHost:
+    Description: DB Host name.
+    Type: String
+    Default: ''
+  DBName:
+    Description: DB name.
+    Type: String
+    Default: ''
+  DBUser:
+    Description: DB User name.
+    Type: String
+    Default: ''
+  DBPassword:
+    Description: DB Password.
+    Type: String
+    Default: ''
+  ExposeDockerDaemon:
+    Description: If set to True, the host docker daemon will be exposed to container
+    Type: String
+    Default: 'False'
+    AllowedValues:
+      - 'True'
+      - 'False'
+  VolumeHostPath:
+    Description: Volume host path (if empty does not mount).
+    Type: String
+    Default: ''
+  VolumeContainerPath:
+    Description: Volume container path.
+    Type: String
+    Default: ''
+  VolumeName:
+    Description: Volume name.
+    Type: String
+    Default: volume
+  ECSServiceMaxCapacity:
+    Description: Max allowed ECS service instances
+    Type: Number
+    Default: '4'
+  ECSServiceMinCapacity:
+    Description: Min allowed ES service instances
+    Type: Number
+    Default: '1'
+Conditions:
+  AutoScales: !Equals
+    - !Ref 'Scales'
+    - 'True'
+  ELBInternalCondition: !Equals
+    - !Ref 'IsELBInternal'
+    - 'False'
+  LogCondition: !Not
+    - !Equals
+      - !Ref 'LogHost'
+      - ''
+  AWSLogCondition: !Not
+    - !Condition 'LogCondition'
+  VolumeCondition: !Not
+    - !Equals
+      - !Ref 'VolumeHostPath'
+      - ''
+  DaemonCondition: !Equals
+    - !Ref 'ExposeDockerDaemon'
+    - 'True'
+  ELBListenerCondition: !Equals
+    - !Ref 'ELBListenerProtocol2'
+    - ''
+  UseCookieStickinessPolicy: !Equals
+    - !Ref 'UseELBCookieStickinessPolicy'
+    - 'True'
+  UseSSLCertificate: !Equals
+    - !Ref 'ELBListenerCert'
+    - ''
+  UseSSLCertificate2: !Equals
+    - !Ref 'ELBListenerCert2'
+    - ''
+Resources:
+  LogGroup:
+    Condition: AWSLogCondition
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join
+        - '-'
+        - - !Ref 'ContainerName'
+          - !Ref 'Environment'
+      RetentionInDays: 7
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      ContainerDefinitions:
+        - Name: !Ref 'ContainerName'
+          Cpu: !Ref 'ContainerCpuUnits'
+          Essential: 'true'
+          Image: !Ref 'ContainerImage'
+          Memory: !Ref 'ContainerMemory'
+          PortMappings:
+            - HostPort: !Ref 'InstancePort'
+              ContainerPort: !Ref 'ContainerPort'
+          MountPoints: !If
+            - VolumeCondition
+            - !If
+              - DaemonCondition
+              - - SourceVolume: !Ref 'VolumeName'
+                  ContainerPath: !Ref 'VolumeContainerPath'
+                - SourceVolume: dockercommand
+                  ContainerPath: /usr/bin/docker
+                - SourceVolume: dockersocket
+                  ContainerPath: /var/run/docker.sock
+              - - SourceVolume: !Ref 'VolumeName'
+                  ContainerPath: !Ref 'VolumeContainerPath'
+            - !If
+              - DaemonCondition
+              - - SourceVolume: dockercommand
+                  ContainerPath: /usr/bin/docker
+                - SourceVolume: dockersocket
+                  ContainerPath: /var/run/docker.sock
+              - !Ref 'AWS::NoValue'
+          LogConfiguration: !If
+            - LogCondition
+            - LogDriver: syslog
+              Options:
+                syslog-address: !Join
+                  - ''
+                  - - tcp://
+                    - !Ref 'LogHost'
+                    - :8499
+            - LogDriver: awslogs
+              Options:
+                awslogs-region: !Ref 'AWS::Region'
+                awslogs-group: !Ref 'LogGroup'
+          Environment:
+            - Name: ENVIRONMENT
+              Value: !Ref 'Environment'
+            - Name: PROJECT
+              Value: !Ref 'Project'
+            - Name: RELEASE
+              Value: !Ref 'Release'
+            - Name: PRIVATEDOMAIN
+              Value: !Ref 'PrivateDomain'
+            - Name: PUBLICDOMAIN
+              Value: !Ref 'PublicDomain'
+            - Name: DB_HOST
+              Value: !Ref 'DBHost'
+            - Name: DB_NAME
+              Value: !Ref 'DBName'
+            - Name: DB_USER
+              Value: !Ref 'DBUser'
+            - Name: DB_PASSWORD
+              Value: !Ref 'DBPassword'
+      Volumes: !If
+        - VolumeCondition
+        - !If
+          - DaemonCondition
+          - - Name: !Ref 'VolumeName'
+              Host:
+                SourcePath: !Ref 'VolumeHostPath'
+            - Name: dockercommand
+              Host:
+                SourcePath: /usr/bin/docker
+            - Name: dockersocket
+              Host:
+                SourcePath: /var/run/docker.sock
+          - - Name: !Ref 'VolumeName'
+              Host:
+                SourcePath: !Ref 'VolumeHostPath'
+        - !If
+          - DaemonCondition
+          - - Name: dockercommand
+              Host:
+                SourcePath: /usr/bin/docker
+            - Name: dockersocket
+              Host:
+                SourcePath: /var/run/docker.sock
+          - !Ref 'AWS::NoValue'
+  Route53Record:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Join
+        - ''
+        - - !Ref 'HostedZoneName'
+          - .
+      Comment: !Join
+        - ''
+        - - 'DNS name for '
+          - !Ref 'ContainerName'
+          - ' in '
+          - !Ref 'Environment'
+      Name: !Join
+        - ''
+        - - !Ref 'ContainerName'
+          - .
+          - !Ref 'Environment'
+          - .
+          - !Ref 'AWS::Region'
+          - .
+          - !Ref 'HostedZoneName'
+          - .
+      Type: CNAME
+      TTL: '300'
+      ResourceRecords:
+        - !GetAtt 'EcsElasticLoadBalancer.DNSName'
+  EcsElasticLoadBalancer:
+    Type: AWS::ElasticLoadBalancing::LoadBalancer
+    Properties:
+      Subnets: !Ref 'ELBSubnetList'
+      CrossZone: 'True'
+      SecurityGroups: !Ref 'ELBSecurityGroups'
+      Scheme: !If
+        - ELBInternalCondition
+        - internet-facing
+        - internal
+      Listeners: !If
+        - ELBListenerCondition
+        - - InstancePort: !Ref 'InstancePort'
+            InstanceProtocol: !Ref 'InstanceListenerProtocol'
+            LoadBalancerPort: !Ref 'ELBListenerPort'
+            PolicyNames: !If
+              - UseCookieStickinessPolicy
+              - - ELBPolicy
+              - !Ref 'AWS::NoValue'
+            Protocol: !Ref 'ELBListenerProtocol'
+            SSLCertificateId: !If
+              - UseSSLCertificate
+              - !Ref 'AWS::NoValue'
+              - !Ref 'ELBListenerCert'
+        - - InstancePort: !Ref 'InstancePort'
+            InstanceProtocol: !Ref 'InstanceListenerProtocol'
+            LoadBalancerPort: !Ref 'ELBListenerPort'
+            PolicyNames: !If
+              - UseCookieStickinessPolicy
+              - - ELBPolicy
+              - !Ref 'AWS::NoValue'
+            Protocol: !Ref 'ELBListenerProtocol'
+            SSLCertificateId: !If
+              - UseSSLCertificate
+              - !Ref 'AWS::NoValue'
+              - !Ref 'ELBListenerCert'
+          - InstancePort: !Ref 'InstancePort'
+            InstanceProtocol: !Ref 'InstanceListenerProtocol'
+            LoadBalancerPort: !Ref 'ELBListenerPort2'
+            PolicyNames: !If
+              - UseCookieStickinessPolicy
+              - - ELBPolicy
+              - !Ref 'AWS::NoValue'
+            Protocol: !Ref 'ELBListenerProtocol2'
+            SSLCertificateId: !If
+              - UseSSLCertificate2
+              - !Ref 'AWS::NoValue'
+              - !Ref 'ELBListenerCert2'
+      HealthCheck:
+        Target: !Ref 'HealthCheckTarget'
+        HealthyThreshold: !Ref 'ELBHealthyThreshold'
+        UnhealthyThreshold: !Ref 'ELBUnhealthyThreshold'
+        Interval: !Ref 'ELBIntervalThreshold'
+        Timeout: !Ref 'ELBTimeoutThreshold'
+      Tags:
+        - Key: service
+          Value: !Ref 'ContainerName'
+  EcsService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref 'EcsCluster'
+      DesiredCount: !Ref 'ECSServiceMinCapacity'
+      LoadBalancers:
+        - ContainerName: !Ref 'ContainerName'
+          ContainerPort: !Ref 'ContainerPort'
+          LoadBalancerName: !Ref 'EcsElasticLoadBalancer'
+      Role: !Ref 'EcsServiceRole'
+      TaskDefinition: !Ref 'TaskDefinition'
+  ECSServiceAutoScalingTarget:
+    Condition: AutoScales
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref 'ECSServiceMaxCapacity'
+      MinCapacity: !Ref 'ECSServiceMinCapacity'
+      ResourceId: !Join
+        - /
+        - - service
+          - !Ref 'EcsCluster'
+          - !GetAtt 'EcsService.Name'
+      RoleARN: !Join
+        - ''
+        - - 'arn:aws:iam::'
+          - !Ref 'AWS::AccountId'
+          - :role/
+          - !Ref 'EcsServiceRole'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+  ECSServiceAutoScalingUpPolicy:
+    Condition: AutoScales
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Join
+        - '-'
+        - - !GetAtt 'EcsService.Name'
+          - ScaleUp
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref 'ECSServiceAutoScalingTarget'
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 1
+  ECSServiceAutoScalingDownPolicy:
+    Condition: AutoScales
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Join
+        - '-'
+        - - !GetAtt 'EcsService.Name'
+          - ScaleDown
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref 'ECSServiceAutoScalingTarget'
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 60
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: 0
+            ScalingAdjustment: -1
+  ECSCloudWatchAlarmCPUHigh:
+    Condition: AutoScales
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: 'true'
+      AlarmActions:
+        - !Ref 'ECSServiceAutoScalingUpPolicy'
+      AlarmDescription: High CPU Utilization for ecs service
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ServiceName
+          Value: !GetAtt 'EcsService.Name'
+        - Name: ClusterName
+          Value: !Ref 'EcsCluster'
+      EvaluationPeriods: 2
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Period: 180
+      Statistic: Average
+      Threshold: '70'
+      Unit: Percent
+  ECSCloudWatchAlarmCPULow:
+    Condition: AutoScales
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: 'true'
+      AlarmActions:
+        - !Ref 'ECSServiceAutoScalingDownPolicy'
+      AlarmDescription: Low CPU Utilization for ecs service
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Dimensions:
+        - Name: ServiceName
+          Value: !GetAtt 'EcsService.Name'
+        - Name: ClusterName
+          Value: !Ref 'EcsCluster'
+      EvaluationPeriods: 4
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Period: 180
+      Statistic: Average
+      Threshold: '30'
+      Unit: Percent
+Outputs:
+  EcsService:
+    Value: !Ref 'EcsService'
+  TaskDefinition:
+    Value: !Ref 'TaskDefinition'
+  DNSName:
+    Description: Route53 DNS address
+    Value: !Join
+      - ''
+      - - !Ref 'ContainerName'
+        - .
+        - !Ref 'Environment'
+        - .
+        - !Ref 'AWS::Region'
+        - .
+        - !Ref 'HostedZoneName'
+  ELBDNSName:
+    Description: Route53 DNS address
+    Value: !GetAtt 'EcsElasticLoadBalancer.DNSName'
+  ELBZoneId:
+    Description: Route53 Hosted zone Id for DNS.
+    Value: !GetAtt 'EcsElasticLoadBalancer.CanonicalHostedZoneNameID'
